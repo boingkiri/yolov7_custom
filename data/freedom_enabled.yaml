@@ -1,0 +1,22 @@
+# COCO 2017 dataset http://cocodataset.org
+
+# train and val data as 1) directory: path/images/, 2) file: path/images.txt, or 3) list: [path1/images/, path2/images/]
+# path: ../datasets/
+# train: ../datasets/train
+# val: ../datasets/val
+# train: ../mc_dropout_datasets/train/training
+# val: ../mc_dropout_datasets/val
+# val: ../datasets/train
+
+# train: ../mc_dropout_datasets_before_selection/train
+val: ../active_learning_datasets/freedom_datasets/freedom_enabled/val
+
+# train: train
+# val: val
+# test: ./coco/test-dev2017.txt  # 20288 of 40670 images, submit to https://competitions.codalab.org/competitions/20794
+
+# number of classes
+nc: 1
+
+# class names
+names: [ 'person' ]

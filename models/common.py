@@ -98,38 +98,45 @@ class Foldcut(nn.Module):
 
 class Conv(nn.Module):
     # Standard convolution
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True, dropout_rate=0.2):  # ch_in, ch_out, kernel, stride, padding, groups
         super(Conv, self).__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
         self.bn = nn.BatchNorm2d(c2)
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
+        self.dropout = nn.Dropout(dropout_rate)
+
     def forward(self, x):
-        return self.act(self.bn(self.conv(x)))
+        # return self.act(self.bn(self.conv(x)))
+        return self.dropout(self.act(self.bn(self.conv(x))))
 
     def fuseforward(self, x):
-        return self.act(self.conv(x))
+        # return self.act(self.conv(x))
+        return self.dropout(self.act(self.conv(x)))
     
 
 class RobustConv(nn.Module):
     # Robust convolution (use high kernel size 7-11 for: downsampling and other layers). Train for 300 - 450 epochs.
-    def __init__(self, c1, c2, k=7, s=1, p=None, g=1, act=True, layer_scale_init_value=1e-6):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=7, s=1, p=None, g=1, act=True, layer_scale_init_value=1e-6, dropout_rate=0.2):  # ch_in, ch_out, kernel, stride, padding, groups
         super(RobustConv, self).__init__()
         self.conv_dw = Conv(c1, c1, k=k, s=s, p=p, g=c1, act=act)
         self.conv1x1 = nn.Conv2d(c1, c2, 1, 1, 0, groups=1, bias=True)
         self.gamma = nn.Parameter(layer_scale_init_value * torch.ones(c2)) if layer_scale_init_value > 0 else None
+
+        self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, x):
         x = x.to(memory_format=torch.channels_last)
         x = self.conv1x1(self.conv_dw(x))
         if self.gamma is not None:
             x = x.mul(self.gamma.reshape(1, -1, 1, 1)) 
-        return x
+        return self.dropout(x)
+        # return x
 
 
 class RobustConv2(nn.Module):
     # Robust convolution 2 (use [32, 5, 2] or [32, 7, 4] or [32, 11, 8] for one of the paths in CSP).
-    def __init__(self, c1, c2, k=7, s=4, p=None, g=1, act=True, layer_scale_init_value=1e-6):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=7, s=4, p=None, g=1, act=True, layer_scale_init_value=1e-6, dropout_rate=0.2):  # ch_in, ch_out, kernel, stride, padding, groups
         super(RobustConv2, self).__init__()
         self.conv_strided = Conv(c1, c1, k=k, s=s, p=p, g=c1, act=act)
         self.conv_deconv = nn.ConvTranspose2d(in_channels=c1, out_channels=c2, kernel_size=s, stride=s, 
@@ -137,25 +144,28 @@ class RobustConv2(nn.Module):
         )
         self.gamma = nn.Parameter(layer_scale_init_value * torch.ones(c2)) if layer_scale_init_value > 0 else None
 
+        self.dropout = nn.Dropout(dropout_rate)
+
     def forward(self, x):
         x = self.conv_deconv(self.conv_strided(x))
         if self.gamma is not None:
             x = x.mul(self.gamma.reshape(1, -1, 1, 1)) 
+        x = self.dropout(x)
         return x
     
 
-def DWConv(c1, c2, k=1, s=1, act=True):
+def DWConv(c1, c2, k=1, s=1, act=True, dropout_rate=0.2):
     # Depthwise convolution
-    return Conv(c1, c2, k, s, g=math.gcd(c1, c2), act=act)
+    return Conv(c1, c2, k, s, g=math.gcd(c1, c2), act=act, dropout_rate=dropout_rate)
 
 
 class GhostConv(nn.Module):
     # Ghost Convolution https://github.com/huawei-noah/ghostnet
-    def __init__(self, c1, c2, k=1, s=1, g=1, act=True):  # ch_in, ch_out, kernel, stride, groups
+    def __init__(self, c1, c2, k=1, s=1, g=1, act=True, dropout_rate=0.2):  # ch_in, ch_out, kernel, stride, groups
         super(GhostConv, self).__init__()
         c_ = c2 // 2  # hidden channels
-        self.cv1 = Conv(c1, c_, k, s, None, g, act)
-        self.cv2 = Conv(c_, c_, 5, 1, None, c_, act)
+        self.cv1 = Conv(c1, c_, k, s, None, g, act, dropout_rate)
+        self.cv2 = Conv(c_, c_, 5, 1, None, c_, act, dropout_rate)
 
     def forward(self, x):
         y = self.cv1(x)
@@ -164,14 +174,14 @@ class GhostConv(nn.Module):
 
 class Stem(nn.Module):
     # Stem
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True, dropout_rate=0.2):  # ch_in, ch_out, kernel, stride, padding, groups
         super(Stem, self).__init__()
         c_ = int(c2/2)  # hidden channels
-        self.cv1 = Conv(c1, c_, 3, 2)
-        self.cv2 = Conv(c_, c_, 1, 1)
-        self.cv3 = Conv(c_, c_, 3, 2)
+        self.cv1 = Conv(c1, c_, 3, 2, dropout_rate=dropout_rate)
+        self.cv2 = Conv(c_, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv3 = Conv(c_, c_, 3, 2, dropout_rate=dropout_rate)
         self.pool = torch.nn.MaxPool2d(2, stride=2)
-        self.cv4 = Conv(2 * c_, c2, 1, 1)
+        self.cv4 = Conv(2 * c_, c2, 1, 1, dropout_rate=dropout_rate)
 
     def forward(self, x):
         x = self.cv1(x)
@@ -180,12 +190,12 @@ class Stem(nn.Module):
 
 class DownC(nn.Module):
     # Spatial pyramid pooling layer used in YOLOv3-SPP
-    def __init__(self, c1, c2, n=1, k=2):
+    def __init__(self, c1, c2, n=1, k=2, dropout_rate=0.2):
         super(DownC, self).__init__()
         c_ = int(c1)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c_, c2//2, 3, k)
-        self.cv3 = Conv(c1, c2//2, 1, 1)
+        self.cv1 = Conv(c1, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv2 = Conv(c_, c2//2, 3, k, dropout_rate=dropout_rate)
+        self.cv3 = Conv(c1, c2//2, 1, 1, dropout_rate=dropout_rate)
         self.mp = nn.MaxPool2d(kernel_size=k, stride=k)
 
     def forward(self, x):
@@ -194,11 +204,11 @@ class DownC(nn.Module):
 
 class SPP(nn.Module):
     # Spatial pyramid pooling layer used in YOLOv3-SPP
-    def __init__(self, c1, c2, k=(5, 9, 13)):
+    def __init__(self, c1, c2, k=(5, 9, 13), dropout_rate=0.2):
         super(SPP, self).__init__()
         c_ = c1 // 2  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c_ * (len(k) + 1), c2, 1, 1)
+        self.cv1 = Conv(c1, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv2 = Conv(c_ * (len(k) + 1), c2, 1, 1, dropout_rate=dropout_rate)
         self.m = nn.ModuleList([nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k])
 
     def forward(self, x):
@@ -208,11 +218,11 @@ class SPP(nn.Module):
 
 class Bottleneck(nn.Module):
     # Darknet bottleneck
-    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, shortcut, groups, expansion
         super(Bottleneck, self).__init__()
         c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c_, c2, 3, 1, g=g)
+        self.cv1 = Conv(c1, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv2 = Conv(c_, c2, 3, 1, g=g, dropout_rate=dropout_rate)
         self.add = shortcut and c1 == c2
 
     def forward(self, x):
@@ -221,12 +231,12 @@ class Bottleneck(nn.Module):
 
 class Res(nn.Module):
     # ResNet bottleneck
-    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, shortcut, groups, expansion
         super(Res, self).__init__()
         c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c_, c_, 3, 1, g=g)
-        self.cv3 = Conv(c_, c2, 1, 1)
+        self.cv1 = Conv(c1, c_, 1, 1, dropout_rate=0.2)
+        self.cv2 = Conv(c_, c_, 3, 1, g=g, dropout_rate=0.2)
+        self.cv3 = Conv(c_, c2, 1, 1, dropout_rate=0.2)
         self.add = shortcut and c1 == c2
 
     def forward(self, x):
@@ -235,21 +245,21 @@ class Res(nn.Module):
 
 class ResX(Res):
     # ResNet bottleneck
-    def __init__(self, c1, c2, shortcut=True, g=32, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
-        super().__init__(c1, c2, shortcut, g, e)
+    def __init__(self, c1, c2, shortcut=True, g=32, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, shortcut, groups, expansion
+        super().__init__(c1, c2, shortcut, g, e, dropout_rate=dropout_rate)
         c_ = int(c2 * e)  # hidden channels
 
 
 class Ghost(nn.Module):
     # Ghost Bottleneck https://github.com/huawei-noah/ghostnet
-    def __init__(self, c1, c2, k=3, s=1):  # ch_in, ch_out, kernel, stride
+    def __init__(self, c1, c2, k=3, s=1, dropout_rate=0.2):  # ch_in, ch_out, kernel, stride
         super(Ghost, self).__init__()
         c_ = c2 // 2
-        self.conv = nn.Sequential(GhostConv(c1, c_, 1, 1),  # pw
-                                  DWConv(c_, c_, k, s, act=False) if s == 2 else nn.Identity(),  # dw
-                                  GhostConv(c_, c2, 1, 1, act=False))  # pw-linear
-        self.shortcut = nn.Sequential(DWConv(c1, c1, k, s, act=False),
-                                      Conv(c1, c2, 1, 1, act=False)) if s == 2 else nn.Identity()
+        self.conv = nn.Sequential(GhostConv(c1, c_, 1, 1, dropout_rate=dropout_rate),  # pw
+                                  DWConv(c_, c_, k, s, act=False, dropout_rate=dropout_rate) if s == 2 else nn.Identity(),  # dw
+                                  GhostConv(c_, c2, 1, 1, act=False, dropout_rate=dropout_rate))  # pw-linear
+        self.shortcut = nn.Sequential(DWConv(c1, c1, k, s, act=False, dropout_rate=dropout_rate),
+                                      Conv(c1, c2, 1, 1, act=False, dropout_rate=dropout_rate)) if s == 2 else nn.Identity()
 
     def forward(self, x):
         return self.conv(x) + self.shortcut(x)
@@ -261,17 +271,17 @@ class Ghost(nn.Module):
 
 class SPPCSPC(nn.Module):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, k=(5, 9, 13)):
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, k=(5, 9, 13), dropout_rate=0.2):
         super(SPPCSPC, self).__init__()
         c_ = int(2 * c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c1, c_, 1, 1)
-        self.cv3 = Conv(c_, c_, 3, 1)
-        self.cv4 = Conv(c_, c_, 1, 1)
+        self.cv1 = Conv(c1, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv2 = Conv(c1, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv3 = Conv(c_, c_, 3, 1, dropout_rate=dropout_rate)
+        self.cv4 = Conv(c_, c_, 1, 1, dropout_rate=dropout_rate)
         self.m = nn.ModuleList([nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k])
-        self.cv5 = Conv(4 * c_, c_, 1, 1)
-        self.cv6 = Conv(c_, c_, 3, 1)
-        self.cv7 = Conv(2 * c_, c2, 1, 1)
+        self.cv5 = Conv(4 * c_, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv6 = Conv(c_, c_, 3, 1, dropout_rate=dropout_rate)
+        self.cv7 = Conv(2 * c_, c2, 1, 1, dropout_rate=dropout_rate)
 
     def forward(self, x):
         x1 = self.cv4(self.cv3(self.cv1(x)))
@@ -281,38 +291,38 @@ class SPPCSPC(nn.Module):
 
 class GhostSPPCSPC(SPPCSPC):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, k=(5, 9, 13)):
-        super().__init__(c1, c2, n, shortcut, g, e, k)
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, k=(5, 9, 13), dropout_rate=0.2):
+        super().__init__(c1, c2, n, shortcut, g, e, k, dropout_rate=dropout_rate)
         c_ = int(2 * c2 * e)  # hidden channels
-        self.cv1 = GhostConv(c1, c_, 1, 1)
-        self.cv2 = GhostConv(c1, c_, 1, 1)
-        self.cv3 = GhostConv(c_, c_, 3, 1)
-        self.cv4 = GhostConv(c_, c_, 1, 1)
-        self.cv5 = GhostConv(4 * c_, c_, 1, 1)
-        self.cv6 = GhostConv(c_, c_, 3, 1)
-        self.cv7 = GhostConv(2 * c_, c2, 1, 1)
+        self.cv1 = GhostConv(c1, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv2 = GhostConv(c1, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv3 = GhostConv(c_, c_, 3, 1, dropout_rate=dropout_rate)
+        self.cv4 = GhostConv(c_, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv5 = GhostConv(4 * c_, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv6 = GhostConv(c_, c_, 3, 1, dropout_rate=dropout_rate)
+        self.cv7 = GhostConv(2 * c_, c2, 1, 1, dropout_rate=dropout_rate)
 
 
 class GhostStem(Stem):
     # Stem
-    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
-        super().__init__(c1, c2, k, s, p, g, act)
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True, dropout_rate=0.2):  # ch_in, ch_out, kernel, stride, padding, groups
+        super().__init__(c1, c2, k, s, p, g, act, dropout_rate=dropout_rate)
         c_ = int(c2/2)  # hidden channels
-        self.cv1 = GhostConv(c1, c_, 3, 2)
-        self.cv2 = GhostConv(c_, c_, 1, 1)
-        self.cv3 = GhostConv(c_, c_, 3, 2)
-        self.cv4 = GhostConv(2 * c_, c2, 1, 1)
+        self.cv1 = GhostConv(c1, c_, 3, 2, dropout_rate=dropout_rate)
+        self.cv2 = GhostConv(c_, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv3 = GhostConv(c_, c_, 3, 2, dropout_rate=dropout_rate)
+        self.cv4 = GhostConv(2 * c_, c2, 1, 1, dropout_rate=dropout_rate)
         
 
 class BottleneckCSPA(nn.Module):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(BottleneckCSPA, self).__init__()
         c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c1, c_, 1, 1)
-        self.cv3 = Conv(2 * c_, c2, 1, 1)
-        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+        self.cv1 = Conv(c1, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv2 = Conv(c1, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv3 = Conv(2 * c_, c2, 1, 1, dropout_rate=dropout_rate)
+        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0, dropout_rate=dropout_rate) for _ in range(n)])
 
     def forward(self, x):
         y1 = self.m(self.cv1(x))
@@ -322,13 +332,13 @@ class BottleneckCSPA(nn.Module):
 
 class BottleneckCSPB(nn.Module):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(BottleneckCSPB, self).__init__()
         c_ = int(c2)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c_, c_, 1, 1)
-        self.cv3 = Conv(2 * c_, c2, 1, 1)
-        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+        self.cv1 = Conv(c1, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv2 = Conv(c_, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv3 = Conv(2 * c_, c2, 1, 1, dropout_rate=dropout_rate)
+        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0, dropout_rate=dropout_rate) for _ in range(n)])
 
     def forward(self, x):
         x1 = self.cv1(x)
@@ -339,14 +349,14 @@ class BottleneckCSPB(nn.Module):
 
 class BottleneckCSPC(nn.Module):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(BottleneckCSPC, self).__init__()
         c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c1, c_, 1, 1)
-        self.cv3 = Conv(c_, c_, 1, 1)
-        self.cv4 = Conv(2 * c_, c2, 1, 1)
-        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+        self.cv1 = Conv(c1, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv2 = Conv(c1, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv3 = Conv(c_, c_, 1, 1, dropout_rate=dropout_rate)
+        self.cv4 = Conv(2 * c_, c2, 1, 1, dropout_rate=dropout_rate)
+        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0, dropout_rate=dropout_rate) for _ in range(n)])
 
     def forward(self, x):
         y1 = self.cv3(self.m(self.cv1(x)))
@@ -356,74 +366,74 @@ class BottleneckCSPC(nn.Module):
 
 class ResCSPA(BottleneckCSPA):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__(c1, c2, n, shortcut, g, e)
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__(c1, c2, n, shortcut, g, e, dropout_rate=dropout_rate)
         c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=0.5) for _ in range(n)])
+        self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=0.5, dropout_rate=dropout_rate) for _ in range(n)])
 
 
 class ResCSPB(BottleneckCSPB):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__(c1, c2, n, shortcut, g, e)
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__(c1, c2, n, shortcut, g, e, dropout_rate=dropout_rate)
         c_ = int(c2)  # hidden channels
-        self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=0.5) for _ in range(n)])
+        self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=0.5, dropout_rate=0.2) for _ in range(n)])
 
 
 class ResCSPC(BottleneckCSPC):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__(c1, c2, n, shortcut, g, e)
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__(c1, c2, n, shortcut, g, e, dropout_rate=dropout_rate)
         c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=0.5) for _ in range(n)])
+        self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=0.5, dropout_rate=dropout_rate) for _ in range(n)])
 
 
 class ResXCSPA(ResCSPA):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=True, g=32, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__(c1, c2, n, shortcut, g, e)
+    def __init__(self, c1, c2, n=1, shortcut=True, g=32, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__(c1, c2, n, shortcut, g, e, dropout_rate=dropout_rate)
         c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+        self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=1.0, dropout_rate=dropout_rate) for _ in range(n)])
 
 
 class ResXCSPB(ResCSPB):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=True, g=32, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__(c1, c2, n, shortcut, g, e)
+    def __init__(self, c1, c2, n=1, shortcut=True, g=32, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__(c1, c2, n, shortcut, g, e, dropout_rate=dropout_rate)
         c_ = int(c2)  # hidden channels
-        self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+        self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=1.0, dropout_rate=dropout_rate) for _ in range(n)])
 
 
 class ResXCSPC(ResCSPC):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=True, g=32, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__(c1, c2, n, shortcut, g, e)
+    def __init__(self, c1, c2, n=1, shortcut=True, g=32, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__(c1, c2, n, shortcut, g, e, dropout_rate=dropout_rate)
         c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
+        self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=1.0, dropout_rate=dropout_rate) for _ in range(n)])
 
 
 class GhostCSPA(BottleneckCSPA):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__(c1, c2, n, shortcut, g, e)
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__(c1, c2, n, shortcut, g, e, dropout_rate=dropout_rate)
         c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(*[Ghost(c_, c_) for _ in range(n)])
+        self.m = nn.Sequential(*[Ghost(c_, c_, dropout_rate=dropout_rate) for _ in range(n)])
 
 
 class GhostCSPB(BottleneckCSPB):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__(c1, c2, n, shortcut, g, e)
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__(c1, c2, n, shortcut, g, e, dropout_rate=dropout_rate)
         c_ = int(c2)  # hidden channels
-        self.m = nn.Sequential(*[Ghost(c_, c_) for _ in range(n)])
+        self.m = nn.Sequential(*[Ghost(c_, c_, dropout_rate=dropout_rate) for _ in range(n)])
 
 
 class GhostCSPC(BottleneckCSPC):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__(c1, c2, n, shortcut, g, e)
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__(c1, c2, n, shortcut, g, e, dropout_rate=dropout_rate)
         c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(*[Ghost(c_, c_) for _ in range(n)])
+        self.m = nn.Sequential(*[Ghost(c_, c_, dropout_rate=dropout_rate) for _ in range(n)])
 
 ##### end of cspnet #####
 
@@ -464,7 +474,7 @@ class RepConv(nn.Module):
     # Represented convolution
     # https://arxiv.org/abs/2101.03697
 
-    def __init__(self, c1, c2, k=3, s=1, p=None, g=1, act=True, deploy=False):
+    def __init__(self, c1, c2, k=3, s=1, p=None, g=1, act=True, deploy=False, dropout_rate=0.2):
         super(RepConv, self).__init__()
 
         self.deploy = deploy
@@ -494,6 +504,7 @@ class RepConv(nn.Module):
                 nn.Conv2d( c1, c2, 1, s, padding_11, groups=g, bias=False),
                 nn.BatchNorm2d(num_features=c2),
             )
+        self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, inputs):
         if hasattr(self, "rbr_reparam"):
@@ -504,7 +515,8 @@ class RepConv(nn.Module):
         else:
             id_out = self.rbr_identity(inputs)
 
-        return self.act(self.rbr_dense(inputs) + self.rbr_1x1(inputs) + id_out)
+        # return self.act(self.rbr_dense(inputs) + self.rbr_1x1(inputs) + id_out)
+        return self.dropout(self.act(self.rbr_dense(inputs) + self.rbr_1x1(inputs) + id_out))
     
     def get_equivalent_kernel_bias(self):
         kernel3x3, bias3x3 = self._fuse_bn_tensor(self.rbr_dense)
@@ -645,8 +657,8 @@ class RepConv(nn.Module):
 
 class RepBottleneck(Bottleneck):
     # Standard bottleneck
-    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
-        super().__init__(c1, c2, shortcut=True, g=1, e=0.5)
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5, dropout_rate=0.2):  # ch_in, ch_out, shortcut, groups, expansion
+        super().__init__(c1, c2, shortcut=True, g=1, e=0.5, dropout_rate=0.2)
         c_ = int(c2 * e)  # hidden channels
         self.cv2 = RepConv(c_, c2, 3, 1, g=g)
 
