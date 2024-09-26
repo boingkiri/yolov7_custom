@@ -66,23 +66,13 @@ def measure_bald(model, image, iter_num, autograd=False, grad_value=False):
 
 
     bald_grad = None
-    # bald_grad = []
     if autograd:
         bald_max_sum = bald_max.sum()
         energy_value = - bald_max_sum
-        # bald_grad = torch.autograd.grad(bald_max_sum, image, create_graph=True)[0]
         if grad_value is not None:
             bald_grad = torch.autograd.grad(energy_value, grad_value)[0]
         else:
             bald_grad = torch.autograd.grad(energy_value, image)[0]
-        # bald_grad = torch.vmap(torch.autograd.grad, in_dims=(0, 0), out_dims=0)(bald_max, image)
-        # bald_grad = torch.autograd.grad(bald_max, image, is_grads_batched=True)[0]
-        # for bald_max_elem, image_elem in zip(bald_max, image):
-        #     # bald_grad_elem = torch.autograd.grad(bald_max_elem, image_elem)[0]
-        #     bald_grad_elem = torch.autograd.grad(bald_max_elem, image_elem, allow_unused=True)[0]
-        #     bald_grad.append(bald_grad_elem)
-        #     import pdb; pdb.set_trace()
-        # bald_grad = torch.stack(bald_grad)
 
     return bald_max, bald_grad, torch.mean(out_stack, dim=0)
 

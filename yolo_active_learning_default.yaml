@@ -1,7 +1,5 @@
-data: /mnt/home/jeongjun/layout_diffusion/yolov7/data/missing_person_mc_dropout_al_select.yaml
-img: 640 
-batch: 32 
-weights: /mnt/home/jeongjun/layout_diffusion/yolov7/runs/train/yolov7_mc_dropout/weights/best.pt
+data: /mnt/home/jeongjun/layout_diffusion/yolov7/data/missing_person_normal.yaml
+weights: /mnt/home/jeongjun/layout_diffusion/yolov7/runs/train/yolov7_0806/weights/best.pt
 hyp: /mnt/home/jeongjun/layout_diffusion/yolov7/data/hyp.scratch.p5.yaml
 cfg: /mnt/home/jeongjun/layout_diffusion/yolov7/cfg/training/yolov7.yaml
 batch_size: 32
