@@ -76,11 +76,14 @@ def measure_bald(model, image, iter_num, autograd=False, grad_value=False):
 
     return bald_max, bald_grad, torch.mean(out_stack, dim=0)
 
-def load_model(batch_size, data, cfg, hyp, weights, half_precision=True, device='cpu'):
+# def load_model(batch_size, data, cfg, hyp, weights, half_precision=True, device='cpu'):
+def create_model(batch_size, data, cfg, hyp, half_precision=True, device='cpu'):
     # Configure
     # plots = not opt.evolve  # create plots
-    device = select_device(device, batch_size=batch_size)
-    cuda = device.type != 'cpu'
+    if isinstance(device, str):
+        device = select_device(device, batch_size=batch_size)
+    else:
+        device = device
     with open(data) as f:
         data_dict = yaml.load(f, Loader=yaml.SafeLoader)  # data dict
         
@@ -91,18 +94,24 @@ def load_model(batch_size, data, cfg, hyp, weights, half_precision=True, device=
 
     # Model
     cfg, hyp =  check_file(cfg), check_file(hyp)  # check files
-    if type(weights) is list:
-        weights = opt.weights[0]
+    # if type(weights) is list:
+        # weights = opt.weights[0]
     # with open(opt.hyp, errors='ignore') as f:
     with open(hyp, errors='ignore') as f:
         hyp = yaml.safe_load(f)  # load hyps dict
         if 'anchors' not in hyp:  # anchors commented in hyp.yaml
             hyp['anchors'] = 3
+    # model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
+    model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')) # create
 
+    return model
+
+def load_model(model, weights):
     pretrained = weights.endswith('.pt')
-    ckpt = torch.load(weights, map_location=device)  # load checkpoint
+    # ckpt = torch.load(weights, map_location=device)  # load checkpoint
+    ckpt = torch.load(weights, map_location="cpu")  # load checkpoint
     # model = Model(opt.cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
-    model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
+    # model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
     # exclude = ['anchor'] if (opt.cfg or hyp.get('anchors')) and not opt.resume else []  # exclude keys
     state_dict = ckpt['model'].float().state_dict()  # to FP32
     # exclude = ['anchor'] if (opt.cfg or hyp.get('anchors')) and not opt.resume else []  # exclude keys
